@@ -4,7 +4,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from torchvision import transforms
-import matplotlib.pyplot as plt
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,10 +20,10 @@ class SemanticSegmentationDataset(Dataset):
         self.image_paths = sorted([os.path.join(image_dir, img) for img in os.listdir(image_dir)])
         self.label_paths = sorted([os.path.join(label_dir, lbl) for lbl in os.listdir(label_dir)])
         self.class_colors = {
-            (255, 255, 255): 0, # noise
-            (160, 160, 160): 1, # 5g
-            (80, 80, 80): 2,    # lte
-            (0, 0, 0): 3        # asr
+            (255, 255, 255): 0, 
+            (160, 160, 160): 1, 
+            (80, 80, 80): 2,    
+            (0, 0, 0): 3        
         }
     
     def __len__(self):
@@ -53,13 +52,13 @@ train_transform = transforms.Compose([
 ])
 
 train_dataset = SemanticSegmentationDataset(
-    image_dir='/kaggle/input/j03-spectrum/J03_spectrumm/train/data',
-    label_dir='/kaggle/input/j03-spectrum/J03_spectrumm/train/label',
+    image_dir='/kaggle/input/5g-lte-nr-j03/J03_spectrumm/train/data',
+    label_dir='/kaggle/input/5g-lte-nr-j03/J03_spectrumm/train/label',
     transform=train_transform)
 
 val_dataset = SemanticSegmentationDataset(
-    image_dir='/kaggle/input/j03-spectrum/J03_spectrumm/test/data',
-    label_dir='/kaggle/input/j03-spectrum/J03_spectrumm/test/label',
+    image_dir='/kaggle/input/5g-lte-nr-j03/J03_spectrumm/test/data',
+    label_dir='/kaggle/input/5g-lte-nr-j03/J03_spectrumm/test/label',
     transform=train_transform)
 
 
@@ -143,10 +142,6 @@ def evaluate(model, dataloader, main_loss_fn, device, num_classes):
         "iou": mean_iou
     }
 
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class ASA(nn.Module):
     def __init__(self, in_channels):
@@ -290,7 +285,7 @@ class Backbone(nn.Module):
         return [s2_up, s3_up, s4_up]
 
 class SRM(nn.Module):
-    def __init__(self, in_channels, x_res_channels, out_channels=None):
+    def __init__(self, in_channels, out_channels=None):
         super().__init__()
         if out_channels is None:
             out_channels = in_channels
@@ -326,7 +321,7 @@ class SRM(nn.Module):
         return self.relu(out)
 
 class LCM(nn.Module):
-    def __init__(self, in_channels, x_res_channels, rate=1, out_channels=None):
+    def __init__(self, in_channels, rate=1, out_channels=None):
         super().__init__()
         if out_channels is None:
             out_channels = in_channels * 2
@@ -347,10 +342,10 @@ class LCM(nn.Module):
         return x_combined + x_res
 
 class SynergicFusion(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, num_classes):
         super().__init__()
         self.final_conv = nn.Sequential(
-            nn.Conv2d(64, 4, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(64, num_classes, kernel_size=3, padding=1, bias=False),
         )
         self.upsample_conv = nn.Sequential(
             nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, stride=1, padding=1, bias=False),
@@ -408,13 +403,13 @@ class myModel(nn.Module):
             nn.BatchNorm2d(32),
             nn.GELU(),
         )
-        self.SRM_0 = SRM(in_channels=32, x_res_channels=32, out_channels=64)
-        self.SRM_1 = SRM(in_channels=64, x_res_channels=64, out_channels=160)
-        self.SRM_2 = SRM(in_channels=160, x_res_channels=160, out_channels=256)
-        self.LCM_0 = LCM(in_channels=32, x_res_channels=64, out_channels=64, rate=1)
-        self.LCM_1 = LCM(in_channels=64, x_res_channels=160, out_channels=160, rate=2)
-        self.LCM_2 = LCM(in_channels=160, x_res_channels=256, out_channels=256, rate=3)
-        self.SynergicFusion = SynergicFusion(in_channels=256, out_channels=256)
+        self.SRM_0 = SRM(in_channels=32, out_channels=64)
+        self.SRM_1 = SRM(in_channels=64, out_channels=160)
+        self.SRM_2 = SRM(in_channels=160, out_channels=256)
+        self.LCM_0 = LCM(in_channels=32, out_channels=64, rate=1)
+        self.LCM_1 = LCM(in_channels=64, out_channels=160, rate=2)
+        self.LCM_2 = LCM(in_channels=160, out_channels=256, rate=3)
+        self.SynergicFusion = SynergicFusion(in_channels=256, num_classes=num_classes)        
         self.aux_head = nn.Sequential(
             nn.Conv2d(256, 128, kernel_size=1, padding=0),
         )
