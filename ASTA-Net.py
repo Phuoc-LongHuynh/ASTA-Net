@@ -62,7 +62,7 @@ val_dataset = SemanticSegmentationDataset(
     transform=train_transform)
 
 
-def train_epoch(model, dataloader, main_loss_fn, aux_loss_fn, lambda_aux, optimizer, device, num_classes):
+def train_epoch(model, dataloader, main_loss_fn, aux_loss_fn, main_loss, lambda_aux, optimizer, device, num_classes):
     model.train() 
     running_total_loss, running_main_loss, running_aux_loss = 0.0, 0.0, 0.0
 
@@ -81,7 +81,7 @@ def train_epoch(model, dataloader, main_loss_fn, aux_loss_fn, lambda_aux, optimi
             mode='nearest'
         ).squeeze(1).long()
         loss_aux = aux_loss_fn(aux_output, gt_downsampled)
-        total_loss = loss_main + lambda_aux * loss_aux
+        total_loss = main_loss * loss_main + lambda_aux * loss_aux
         total_loss.backward()
         optimizer.step()
         running_total_loss += total_loss.item() * images.size(0)
@@ -363,26 +363,6 @@ class SynergicFusion(nn.Module):
         out = self.final_conv(self.upsample_x4(self.upsample_conv(fused_output)))
         return out
 
-class ContextualConsistencyLoss(nn.Module):
-    def __init__(self, num_classes, temperature=0.25):
-        super().__init__()
-        self.num_classes = num_classes
-        self.temperature = temperature
-
-    def forward(self, features, gt_mask):
-        B, C, H, W = features.shape
-        N = B * H * W
-        F_flat = features.permute(0, 2, 3, 1).reshape(N, C)
-        y_flat = gt_mask.view(N)
-        mask = F.one_hot(y_flat, num_classes=self.num_classes).float()
-        class_counts = mask.sum(dim=0) + 1e-8
-        prototypes = (mask.T @ F_flat) / class_counts.unsqueeze(1)
-        prototypes = F.normalize(prototypes, dim=1)
-        F_flat = F.normalize(F_flat, dim=1)
-        logits = (F_flat @ prototypes.T) / self.temperature
-        loss = F.cross_entropy(logits, y_flat, reduction='mean')
-        return loss
-
 class myModel(nn.Module):
     def __init__(self, num_classes, in_channels=3):
         super().__init__()
@@ -410,26 +390,51 @@ class myModel(nn.Module):
         self.LCM_1 = LCM(in_channels=64, out_channels=160, rate=2)
         self.LCM_2 = LCM(in_channels=160, out_channels=256, rate=3)
         self.SynergicFusion = SynergicFusion(in_channels=256, num_classes=num_classes)        
-        self.aux_head = nn.Sequential(
+        self.S_head = nn.Sequential(
             nn.Conv2d(256, 128, kernel_size=1, padding=0),
         )
 
     def forward(self, x):
+        # Transformer encoder
         s1, s2, s3 = self.backbone(x)
+        # SR path
         x1 = self.first_layer_1(x)
         b1_0 = self.SRM_0(x1, s1)
         b1_1 = self.SRM_1(b1_0, s2)
         b1_2 = self.SRM_2(b1_1, s3)
+        # PS path
         x2 = self.first_layer_2(x)
         b2_0 = self.LCM_0(x2, s1)
         b2_1 = self.LCM_1(b2_0, s2)
         b2_2 = self.LCM_2(b2_1, s3)
         out = self.SynergicFusion(b1_2, b2_2, s3)
         if self.training:
-            return out, self.aux_head(b2_2)
+            return out, self.S_head(b2_2)
         else:
             return out
         
+# --- AGGREGATION LOSS ---
+class AGGREGATIONLOSS(nn.Module):
+    def __init__(self, num_classes, temperature=0.3):
+        super().__init__()
+        self.num_classes = num_classes
+        self.temperature = temperature
+
+    def forward(self, features, gt_mask):
+        B, C, H, W = features.shape
+        N = B * H * W
+        F_flat = features.permute(0, 2, 3, 1).reshape(N, C)
+        y_flat = gt_mask.view(N)
+        mask = F.one_hot(y_flat, num_classes=self.num_classes).float()
+        class_counts = mask.sum(dim=0) + 1e-8
+        prototypes = (mask.T @ F_flat) / class_counts.unsqueeze(1)
+        prototypes = F.normalize(prototypes, dim=1)
+        F_flat = F.normalize(F_flat, dim=1)
+        logits = (F_flat @ prototypes.T) / self.temperature
+        loss = F.cross_entropy(logits, y_flat, reduction='mean')
+        return loss
+    
+
 train_dataloader = DataLoader(train_dataset, batch_size=32, pin_memory=True, shuffle=True, num_workers=os.cpu_count())
 val_dataloader = DataLoader(val_dataset, batch_size=32, pin_memory=True, shuffle=False, num_workers=os.cpu_count())
 print(f"Train size: {len(train_dataset)}, Validation size: {len(val_dataset)}")
@@ -450,9 +455,9 @@ model = model.to(device)
 model = nn.DataParallel(model)
 
 main_loss_fn = nn.CrossEntropyLoss().to(device)
-aux_loss_fn = ContextualConsistencyLoss(num_classes=num_classes).to(device)
-lambda_aux = 0.4
-
+aux_loss_fn = AGGREGATIONLOSS(num_classes=num_classes).to(device)
+lambda_aux = 0.5
+main_loss = 0.7
 optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-5)
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6)
 
@@ -470,7 +475,7 @@ val_mIoUs = []
 
 # --- TRAINING LOOP ---
 for epoch in range(num_epochs):
-    train_metrics = train_epoch(model, train_dataloader, main_loss_fn, aux_loss_fn, lambda_aux, optimizer, device, num_classes)
+    train_metrics = train_epoch(model, train_dataloader, main_loss_fn, aux_loss_fn, main_loss, lambda_aux, optimizer, device, num_classes)
     val_metrics = evaluate(model, val_dataloader, main_loss_fn, device, num_classes)
 
     epoch_loss_train = train_metrics["total_loss"]
