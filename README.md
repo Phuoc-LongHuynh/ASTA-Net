@@ -5,7 +5,7 @@ This paper presents ASTA-Net (Attentive Synergic Tri-stream Additive Network), a
 By harmonizing these components, ASTA-Net effectively segments various signal types, including 5G New Radio (NR), Long-Term Evolution (LTE), and Airport Surveillance Radar (ASR), even under challenging and noisy conditions. Experimental evaluations reveal that ASTA-Net attains 72.59% mean accuracy and 58.10% mean IoU, while maintaining only 11.0M parameters and 5.06 ms inference latency. These outcomes highlight ASTA-Net’s strong balance between efficiency and robustness, establishing it as a lightweight yet high-performance solution for real-time wideband spectrum analysis.
 
 <p align="center">
-  <img src="ASTANet.png" alt="ASTA-Net Architecture" width="60%">
+  <img src="ASTANet.png" alt="ASTA-Net Architecture" width="100%">
 </p>
 
 ## Dataset
